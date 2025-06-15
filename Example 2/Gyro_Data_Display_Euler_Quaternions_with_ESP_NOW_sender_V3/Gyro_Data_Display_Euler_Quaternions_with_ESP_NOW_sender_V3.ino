@@ -86,17 +86,17 @@ byte brightness[7] = {100, 120, 140, 180, 200, 230, 254 };
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);
 
 // Replace with own receiver MAC address
-// ESP32 MAC Address: C0:4E:30:90:F2:34
-uint8_t receiverMAC[] = {0xC0, 0x4E, 0x30, 0x90, 0xF2, 0x34};
+// ESP32-1 MAC Address: C0:4E:30:90:F2:34
+// ESP32-2 MAC Address: C0:4E:30:90:5B:5C
+uint8_t slave1[] = {0xC0, 0x4E, 0x30, 0x90, 0xF2, 0x34};
+uint8_t slave2[] = {0xC0, 0x4E, 0x30, 0x90, 0x5B, 0x5C};
 
-typedef struct {
-  float orientX, orientY, orientZ;
-  // float accX, accY, accZ;
-  // float gyroX, gyroY, gyroZ;
-  // float magX, magY, magZ;
-} IMUData;
+struct struct_stepper { // for outgoing message
+  float stepper_angle;
+};
 
-IMUData data;
+struct_stepper outgoingMessage_1 = {0.0};
+struct_stepper outgoingMessage_2 = {0.0};
 
 // Struct to store quaternions
 struct Quaternion {
@@ -140,7 +140,7 @@ void setup() {
   rm67162_init();  // amoled lcd initialization
   lcd_setRotation(1);
 
-  Serial.begin(9600);
+  Serial.begin(115200);
   delay(500);
 
   Wire.begin(SDA_1, SCL_1);           
@@ -157,7 +157,8 @@ void setup() {
     while(1);
   }
   
-  
+  delay(500);
+
   bno.setExtCrystalUse(true);
 
   delay(1000);// Through trial and error, need this delay for getQuat and getEvent to work properly, suspect may be minimum time required after bno.setExtCrystalUse(1) and bno.begin()
@@ -185,26 +186,32 @@ void setup() {
   delay(100);
 
   // Configure peer
-  esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, receiverMAC, 6);
-  peerInfo.channel = 0;  // 0 matches current Wi-Fi channel
-  peerInfo.encrypt = false;
-
-  delay(100);
-
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("Failed to add peer");
-    return;
-  }
-
-  delay(100);
+  addPeer(slave1);
+  addPeer(slave2);
 
 }
 
-// OUTSIDE setup(): Create the callback properly
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  Serial.print("Send Status: ");
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr),
+           "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac_addr[0], mac_addr[1], mac_addr[2],
+           mac_addr[3], mac_addr[4], mac_addr[5]);
+
+  Serial.print("📤 Sent to: ");
+  Serial.print(macStr);
+  Serial.print(" | Status: ");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+}
+
+void addPeer(uint8_t *mac) {
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, mac, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+  if (!esp_now_is_peer_exist(mac)) {
+    esp_now_add_peer(&peerInfo);
+  }
 }
 
 void drawSprite() {
@@ -328,9 +335,10 @@ void update_BNO055_Status(void)
   euler_angles[1] = event.orientation.y;
   euler_angles[2] = event.orientation.z;
 
-  data.orientX = event.orientation.x;
-  data.orientY = event.orientation.y;
-  data.orientZ = event.orientation.z;
+  outgoingMessage_1.stepper_angle = event.orientation.y;
+  outgoingMessage_2.stepper_angle = event.orientation.z;
+  //data.orientY = event.orientation.y;
+  //data.orientZ = event.orientation.z;
 
   // Zeroing the angles
   for (int i = 0; i < 3; i++) {
@@ -498,7 +506,8 @@ void loop() {
   update_BNO055_Status();
   drawSprite();
 
-  esp_err_t result = esp_now_send(receiverMAC, (uint8_t *)&data, sizeof(data));
-  delay(20);  // Send data at 500 Hz
+  esp_now_send(slave1, (uint8_t *) &outgoingMessage_1, sizeof(outgoingMessage_1));
+  esp_now_send(slave2, (uint8_t *) &outgoingMessage_2, sizeof(outgoingMessage_2));
+  delay(50); // Try 20 Hz
 
 }
